@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Box, Typography, Card, CardContent, CircularProgress, Divider } from "@mui/material";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from "recharts";
 
-// Exemple de données simulées (remplacer par API backend)
+
 const mockPerformanceData = [
   { date: "2024-12-01", note: 12, moyenne: 10 },
   { date: "2025-01-15", note: 14, moyenne: 11 },
@@ -14,11 +14,11 @@ const SuivrePerformance = () => {
   const [performanceData, setPerformanceData] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Appel API pour récupérer les données réelles
+ 
   useEffect(() => {
-    // Simuler chargement API
+    
     setTimeout(() => {
-      setPerformanceData(mockPerformanceData); // Remplacer par appel API réel
+      setPerformanceData(mockPerformanceData); 
       setLoading(false);
     }, 1000);
   }, []);

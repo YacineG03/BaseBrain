@@ -38,7 +38,7 @@ const ProposerCorrection = () => {
       console.log("Sujet choisi :", selectedSujet);
       console.log("Fichier :", file);
       alert(`Correction pour "${selectedSujet.title}" bien envoyée !`);
-      // ➤ Ici, appel API backend pour envoyer la correction
+      
     } else {
       alert("Veuillez sélectionner un sujet et ajouter un fichier de correction.");
     }

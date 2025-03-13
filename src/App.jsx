@@ -9,19 +9,19 @@ import EspaceEtudiant from "./pages/EspaceEtudiant"; // Dashboard global
 import TraiterSujet from "./pages/TraiterSujet";
 import ConsulterCorrection from './pages/ConsulterCorrection';
 import SuivrePerformence from './pages/SuivrePerformence';
-import ProposerCorrection from './pages/ProposerCorrection'; // ✅ Nouvelle page ajoutée
+import ProposerCorrection from './pages/ProposerCorrection'; 
 
 function App() {
   const [darkMode, setDarkMode] = useState(false);
 
-  // Thème global (dark / light mode)
+  
   const theme = createTheme({
     palette: {
       mode: darkMode ? "dark" : "light",
-      primary: { main: "#8e5cda" }, // Violet principal
+      primary: { main: "#8e5cda" }, 
       background: {
-        default: darkMode ? "#121212" : "#f4f4f4", // Fond général
-        paper: darkMode ? "#1e1e1e" : "#fff", // Fond pour les papiers (cards, modales, etc.)
+        default: darkMode ? "#121212" : "#f4f4f4", 
+        paper: darkMode ? "#1e1e1e" : "#fff", 
       },
       text: {
         primary: darkMode ? "#fff" : "#333",
@@ -51,10 +51,10 @@ function App() {
             <Route path="traiter-sujet" element={<TraiterSujet />} />
             <Route path="consulter-correction" element={<ConsulterCorrection />} />
             <Route path="suivre-performence" element={<SuivrePerformence />} />
-            <Route path="proposer-correction" element={<ProposerCorrection />} /> {/* ✅ Ajout définitif */}
+            <Route path="proposer-correction" element={<ProposerCorrection />} /> 
           </Route>
 
-          {/* Fallback si route non trouvée */}
+          
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       </Router>

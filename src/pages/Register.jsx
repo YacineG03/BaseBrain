@@ -13,10 +13,10 @@ import {
   InputAdornment,
 } from "@mui/material";
 import { Email, Lock, Phone, Person } from "@mui/icons-material";
-import { useNavigate } from "react-router-dom"; // 🚀 Import de useNavigate
+import { useNavigate } from "react-router-dom"; 
 
 const Register = () => {
-  const navigate = useNavigate(); // Hook pour la navigation 🚀
+  const navigate = useNavigate(); 
 
   const [form, setForm] = useState({
     prenom: "",
@@ -238,7 +238,7 @@ const Register = () => {
           Inscrivez-vous pour accéder à votre espace personnel
         </Typography>
 
-        {/* Image Illustration */}
+        
         <Box
           component="img"
           src="/src/assets/telechargement.jpg"

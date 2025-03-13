@@ -30,7 +30,7 @@ const EspaceEtudiant = ({ darkMode, setDarkMode }) => {
   const navigate = useNavigate();
 
   const handleLogout = () => {
-    // Action de déconnexion, redirection vers login
+    
     navigate("/login");
   };
 
@@ -38,7 +38,6 @@ const EspaceEtudiant = ({ darkMode, setDarkMode }) => {
     <Box sx={{ display: "flex", height: "100vh", width: "100vw" }}>
       <CssBaseline />
 
-      {/* ✅ Barre latérale (Menu) */}
       <Drawer
         variant="permanent"
         sx={{
@@ -55,7 +54,7 @@ const EspaceEtudiant = ({ darkMode, setDarkMode }) => {
           },
         }}
       >
-        {/* ✅ Titre et nom étudiant */}
+      
         <Box sx={{ p: 2 }}>
           <Typography variant="h5" fontWeight="bold" display="flex" alignItems="center">
             Base Brain <Psychology sx={{ ml: 1 }} />
@@ -67,7 +66,7 @@ const EspaceEtudiant = ({ darkMode, setDarkMode }) => {
 
         <Divider sx={{ backgroundColor: "rgba(255, 255, 255, 0.3)" }} />
 
-        {/* ✅ Liste de navigation */}
+       
         <List>
           <ListItem
             button
@@ -116,7 +115,7 @@ const EspaceEtudiant = ({ darkMode, setDarkMode }) => {
           </ListItem>
         </List>
 
-        {/* ✅ Déconnexion */}
+       
         <Box sx={{ mt: "auto", p: 2 }}>
           <Divider sx={{ backgroundColor: "rgba(255, 255, 255, 0.3)", mb: 1 }} />
           <ListItem
@@ -132,7 +131,7 @@ const EspaceEtudiant = ({ darkMode, setDarkMode }) => {
         </Box>
       </Drawer>
 
-      {/* ✅ Contenu principal + Dark mode */}
+   
       <Box
         component="main"
         sx={{
@@ -144,7 +143,7 @@ const EspaceEtudiant = ({ darkMode, setDarkMode }) => {
           overflow: "hidden",
         }}
       >
-        {/* ✅ Bouton Dark/Light mode */}
+      
         <IconButton
           onClick={() => setDarkMode(!darkMode)}
           color="inherit"
@@ -161,7 +160,7 @@ const EspaceEtudiant = ({ darkMode, setDarkMode }) => {
           {darkMode ? <Brightness7 /> : <Brightness4 />}
         </IconButton>
 
-        {/* ✅ Outlet pour afficher les pages enfants */}
+        
         <Box
           sx={{
             p: 3,
