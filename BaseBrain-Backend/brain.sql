@@ -52,3 +52,14 @@ CREATE TABLE corrections (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (exercise_id) REFERENCES exercises(id)
 );
+
+CREATE TABLE correction_models (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  correction_id INT NOT NULL,
+  file_url TEXT NOT NULL,
+  model_name VARCHAR(255) NOT NULL,
+  description TEXT,
+  configuration JSON,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (correction_id) REFERENCES corrections(id) ON DELETE CASCADE
+);

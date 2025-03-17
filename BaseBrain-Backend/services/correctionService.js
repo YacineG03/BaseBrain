@@ -1,14 +1,58 @@
-const fs = require('fs').promises;
+const fs = require('fs');
+const fsPromises = require('fs').promises; // Pour les opérations asynchrones comme readFile
+const path = require('path');
+const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
 const pdfParse = require('pdf-parse');
 const pool = require('../config/database');
+
+// Configuration du client S3 pour MinIO
+const s3Client = new S3Client({
+  region: 'us-east-1', // Région par défaut, peut être ajustée si nécessaire
+  endpoint: process.env.MINIO_ENDPOINT || 'http://localhost:9000',
+  forcePathStyle: true, // Nécessaire pour MinIO
+  credentials: {
+    accessKeyId: process.env.MINIO_ACCESS_KEY || 'minioadmin',
+    secretAccessKey: process.env.MINIO_SECRET_KEY || 'minioadmin',
+  },
+});
+
+// Fonction pour télécharger un fichier depuis MinIO et l'enregistrer localement
+const downloadFile = async (url, destinationPath) => {
+  try {
+    // Extraire le bucket et la clé à partir de l'URL
+    const urlParts = new URL(url);
+    const pathParts = urlParts.pathname.split('/').filter(part => part); // Supprime les "/" vides
+    const bucket = pathParts[0]; // Le premier segment après le hostname
+    const key = pathParts.slice(1).join('/'); // Le reste du chemin
+
+    const command = new GetObjectCommand({
+      Bucket: bucket,
+      Key: key,
+    });
+
+    const response = await s3Client.send(command);
+    const fileStream = response.Body;
+
+    // Écrire le flux dans un fichier local
+    await new Promise((resolve, reject) => {
+      const file = fs.createWriteStream(destinationPath);
+      fileStream.pipe(file);
+      file.on('finish', resolve);
+      file.on('error', reject);
+    });
+  } catch (error) {
+    console.error(`Erreur lors du téléchargement du fichier depuis ${url}:`, error.message);
+    throw error;
+  }
+};
 
 // Fonction pour extraire les questions numérotées d’un PDF
 const extractQuestionsFromPDF = async (filePath) => {
   try {
-    const pdfBuffer = await fs.readFile(filePath);
+    const pdfBuffer = await fsPromises.readFile(filePath);
     const pdfData = await pdfParse(pdfBuffer);
     const text = pdfData.text.trim();
-    console.log(`Texte brut extrait du PDF ${filePath} :`, text); // Log pour débogage
+    console.log(`Texte brut extrait du PDF ${filePath} :`, text);
 
     const questions = [];
     const lines = text.split('\n');
@@ -17,31 +61,25 @@ const extractQuestionsFromPDF = async (filePath) => {
 
     for (let i = 0; i < lines.length; i++) {
       let line = lines[i].trim();
-      console.log(`Ligne analysée (${i}): "${line}"`); // Log pour chaque ligne avec index
+      console.log(`Ligne analysée (${i}): "${line}"`);
 
-      // Détecter un numéro (seul ou avec point)
       if (line.match(/^\d+(\.|)?$/) && !collectingContent) {
         if (currentQuestion && currentQuestion.trim()) questions.push(currentQuestion.trim());
         currentQuestion = line;
         collectingContent = true;
-      }
-      // Ajouter les lignes suivantes comme contenu jusqu’au prochain numéro
-      else if (collectingContent && line) {
+      } else if (collectingContent && line) {
         if (currentQuestion) currentQuestion += '\n' + line;
-        // Vérifier la ligne suivante pour arrêter si c’est un nouveau numéro
         if (i + 1 < lines.length && lines[i + 1].trim().match(/^\d+(\.|)?$/)) {
           collectingContent = false;
         }
-      }
-      // Réinitialiser si ligne vide après un numéro
-      else if (!line && collectingContent) {
+      } else if (!line && collectingContent) {
         collectingContent = false;
       }
     }
     if (currentQuestion && currentQuestion.trim()) questions.push(currentQuestion.trim());
     const filteredQuestions = questions
-      .filter(q => q && q.match(/^\d+(\.|)?\s*.+/) && !q.includes('n\'hésitez pas')) // Exclure les notes finales
-      .map(q => q.replace(/^\d+(\.|)?\s*/, '').trim()); // Supprimer le numéro initial
+      .filter(q => q && q.match(/^\d+(\.|)?\s*.+/) && !q.includes('n\'hésitez pas'))
+      .map(q => q.replace(/^\d+(\.|)?\s*/, '').trim());
     console.log(`Questions extraites du PDF ${filePath} :`, filteredQuestions);
     return filteredQuestions;
   } catch (error) {
@@ -51,30 +89,48 @@ const extractQuestionsFromPDF = async (filePath) => {
 };
 
 // Fonction pour mettre à jour correction_model pour une correction spécifique
-async function updateCorrectionModel(correctionId, filePath) {
+async function updateCorrectionModel(correctionId, minioUrls) {
   try {
-    // Extraire les questions du fichier PDF
-    const questions = await extractQuestionsFromPDF(filePath);
+    if (!minioUrls || !Array.isArray(minioUrls) || minioUrls.length === 0) {
+      console.log(`Aucun fichier fourni pour la correction ${correctionId}.`);
+      return;
+    }
+
     const allQuestions = new Map();
-    questions.forEach(q => {
-      const [questionText, query] = q.split('\n').reduce(
-        (acc, line) => {
-          if (line.trim().match(/SELECT|FROM|WHERE|JOIN|GROUP/i)) {
-            acc[1] += (acc[1] ? '\n' : '') + line.trim();
-          } else {
-            acc[0] += (acc[0] ? ' ' : '') + line.trim();
-          }
-          return acc;
-        },
-        ['', '']
-      );
-      if (questionText && query) {
-        const normalizedQuestionText = questionText.replace(/\s+/g, ' ').toLowerCase().trim();
-        if (!allQuestions.has(normalizedQuestionText)) {
-          allQuestions.set(normalizedQuestionText, { text: questionText, query: query });
+    for (const url of minioUrls) {
+      try {
+        const tempFilePath = path.join(__dirname, `../uploads/temp-${Date.now()}-${Math.random().toString(36).substring(7)}.pdf`);
+        await downloadFile(url, tempFilePath);
+        const questions = await extractQuestionsFromPDF(tempFilePath);
+
+        if (fs.existsSync(tempFilePath)) {
+          await fsPromises.unlink(tempFilePath);
         }
+
+        questions.forEach(q => {
+          const [questionText, query] = q.split('\n').reduce(
+            (acc, line) => {
+              if (line.trim().match(/SELECT|FROM|WHERE|JOIN|GROUP/i)) {
+                acc[1] += (acc[1] ? '\n' : '') + line.trim();
+              } else {
+                acc[0] += (acc[0] ? ' ' : '') + line.trim();
+              }
+              return acc;
+            },
+            ['', '']
+          );
+          if (questionText && query) {
+            const normalizedQuestionText = questionText.replace(/\s+/g, ' ').toLowerCase().trim();
+            if (!allQuestions.has(normalizedQuestionText)) {
+              allQuestions.set(normalizedQuestionText, { text: questionText, query: query });
+            }
+          }
+        });
+      } catch (error) {
+        console.error(`Erreur lors du traitement de l'URL ${url}:`, error.message);
+        continue;
       }
-    });
+    }
 
     let correctionModel = '';
     if (allQuestions.size > 0) {
@@ -85,7 +141,6 @@ async function updateCorrectionModel(correctionId, filePath) {
     }
 
     if (correctionModel) {
-      // Mettre à jour corrections.correction_model pour cette correction spécifique
       const query = 'UPDATE corrections SET correction_model = ? WHERE id = ?';
       await pool.execute(query, [correctionModel, correctionId]);
       console.log(`Correction_model mis à jour pour la correction ${correctionId}. Contenu :`, correctionModel);
