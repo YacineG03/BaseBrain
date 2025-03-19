@@ -19,42 +19,14 @@ class Submission {
   }
 
   // Récupérer une soumission par son ID (pour un professeur)
-  // static async findById(submissionId, professorId) {
-  //   try {
-  //     const [rows] = await pool.execute(
-  //       `SELECT s.*, u.email AS student_email 
-  //        FROM submissions s 
-  //        JOIN users u ON s.student_id = u.id 
-  //        JOIN exercises e ON s.exercise_id = e.id 
-  //        WHERE s.id = ? AND e.professor_id = ?`,
-  //       [submissionId, professorId]
-  //     );
-  //     return rows[0] || null;
-  //   } catch (err) {
-  //     throw new Error('Erreur lors de la récupération de la soumission : ' + err.message);
-  //   }
-  // }
   static async findById(submissionId, professorId) {
     try {
       const [rows] = await pool.execute(
-        `SELECT 
-    s.id,
-    s.student_id,
-    s.exercise_id,
-    s.note,
-    s.feedback,
-    s.status,
-    s.submitted_at,
-    s.updated_at,
-    u.prenom,
-    u.nom,
-    u.email AS student_email,
-    e.title AS exercise_title
-FROM submissions s
-JOIN users u ON s.student_id = u.id
-JOIN exercises e ON s.exercise_id = e.id
-WHERE s.id = :submissionId
-    AND e.professor_id = :professorId;`,
+        `SELECT s.*, u.email AS student_email 
+         FROM submissions s 
+         JOIN users u ON s.student_id = u.id 
+         JOIN exercises e ON s.exercise_id = e.id 
+         WHERE s.id = ? AND e.professor_id = ?`,
         [submissionId, professorId]
       );
       return rows[0] || null;
@@ -62,6 +34,7 @@ WHERE s.id = :submissionId
       throw new Error('Erreur lors de la récupération de la soumission : ' + err.message);
     }
   }
+
 
   static async findByIdForStudent(submissionId) {
     try {
@@ -124,65 +97,14 @@ WHERE s.id = :submissionId
   }
 
   // Récupérer toutes les soumissions pour un exercice spécifique (pour un professeur)
-  // static async findByExerciseId(exerciseId, professorId, filters = {}, pagination = {}) {
-  //   try {
-  //     let query = `
-  //       SELECT s.*, u.email AS student_email 
-  //       FROM submissions s 
-  //       JOIN users u ON s.student_id = u.id 
-  //       JOIN exercises e ON s.exercise_id = e.id 
-  //       WHERE s.exercise_id = ? AND e.professor_id = ?
-  //     `;
-  //     const params = [exerciseId, professorId];
-
-  //     if (filters.status) {
-  //       query += ' AND s.status = ?';
-  //       params.push(filters.status);
-  //     }
-  //     if (filters.submitted_at) {
-  //       query += ' AND DATE(s.submitted_at) = ?';
-  //       params.push(filters.submitted_at);
-  //     }
-
-  //     if (pagination.limit && pagination.offset !== undefined) {
-  //       query += ' ORDER BY s.submitted_at DESC LIMIT ? OFFSET ?';
-  //       params.push(parseInt(pagination.limit), parseInt(pagination.offset));
-  //     } else {
-  //       query += ' ORDER BY s.submitted_at DESC';
-  //     }
-
-  //     const [rows] = await pool.execute(query, params);
-  //     return rows;
-  //   } catch (err) {
-  //     throw new Error('Erreur lors de la récupération des soumissions pour l\'exercice : ' + err.message);
-  //   }
-  // }
-
   static async findByExerciseId(exerciseId, professorId, filters = {}, pagination = {}) {
     try {
       let query = `
-       SELECT 
-    s.id,
-    s.student_id,
-    s.exercise_id,
-    s.note,
-    s.feedback,
-    s.status,
-    s.submitted_at,
-    s.updated_at,
-    u.prenom,
-    u.nom,
-    u.email AS student_email,
-    e.title AS exercise_title
-FROM submissions s
-JOIN users u ON s.student_id = u.id
-JOIN exercises e ON s.exercise_id = e.id
-WHERE s.exercise_id = :exerciseId
-    AND e.professor_id = :professorId
-    AND (:status IS NULL OR s.status = :status)
-    AND (:submitted_at IS NULL OR DATE(s.submitted_at) = :submitted_at)
-ORDER BY s.submitted_at DESC
-LIMIT :limit OFFSET :offset;
+        SELECT s.*, u.email AS student_email 
+        FROM submissions s 
+        JOIN users u ON s.student_id = u.id 
+        JOIN exercises e ON s.exercise_id = e.id 
+        WHERE s.exercise_id = ? AND e.professor_id = ?
       `;
       const params = [exerciseId, professorId];
 
@@ -210,46 +132,14 @@ LIMIT :limit OFFSET :offset;
   }
 
   // Récupérer une soumission par exercice et étudiant (pour un professeur)
-  // static async findByExerciseAndStudent(exerciseId, studentId, professorId) {
-  //   try {
-  //     const [rows] = await pool.execute(
-  //       `SELECT s.*, u.email AS student_email 
-  //        FROM submissions s 
-  //        JOIN users u ON s.student_id = u.id 
-  //        JOIN exercises e ON s.exercise_id = e.id 
-  //        WHERE s.exercise_id = ? AND s.student_id = ? AND e.professor_id = ?`,
-  //       [exerciseId, studentId, professorId]
-  //     );
-  //     return rows[0] || null;
-  //   } catch (err) {
-  //     throw new Error('Erreur lors de la récupération de la soumission : ' + err.message);
-  //   }
-  // }
-
   static async findByExerciseAndStudent(exerciseId, studentId, professorId) {
     try {
       const [rows] = await pool.execute(
-        `
-        SELECT 
-    s.id,
-    s.student_id,
-    s.exercise_id,
-    s.note,
-    s.feedback,
-    s.status,
-    s.submitted_at,
-    s.updated_at,
-    u.prenom,
-    u.nom ,
-    u.email AS student_email,
-    e.title AS exercise_title
-FROM submissions s
-JOIN users u ON s.student_id = u.id
-JOIN exercises e ON s.exercise_id = e.id
-WHERE s.exercise_id = :exerciseId
-    AND s.student_id = :studentId
-    AND e.professor_id = :professorId;
-        `,
+        `SELECT s.*, u.email AS student_email 
+         FROM submissions s 
+         JOIN users u ON s.student_id = u.id 
+         JOIN exercises e ON s.exercise_id = e.id 
+         WHERE s.exercise_id = ? AND s.student_id = ? AND e.professor_id = ?`,
         [exerciseId, studentId, professorId]
       );
       return rows[0] || null;
@@ -258,42 +148,14 @@ WHERE s.exercise_id = :exerciseId
     }
   }
 
-  // Compter les soumissions pour un exercice (pour un professeur)
-  // static async countByExerciseId(exerciseId, professorId, filters = {}) {
-  //   try {
-  //     let query = `
-  //       SELECT COUNT(*) as total 
-  //       FROM submissions s 
-  //       JOIN exercises e ON s.exercise_id = e.id 
-  //       WHERE s.exercise_id = ? AND e.professor_id = ?
-  //     `;
-  //     const params = [exerciseId, professorId];
-
-  //     if (filters.status) {
-  //       query += ' AND s.status = ?';
-  //       params.push(filters.status);
-  //     }
-  //     if (filters.submitted_at) {
-  //       query += ' AND DATE(s.submitted_at) = ?';
-  //       params.push(filters.submitted_at);
-  //     }
-
-  //     const [result] = await pool.execute(query, params);
-  //     return result[0].total;
-  //   } catch (err) {
-  //     throw new Error('Erreur lors du comptage des soumissions pour l\'exercice : ' + err.message);
-  //   }
-  // }
+ // Compter les soumissions pour un exercice (pour un professeur)
   static async countByExerciseId(exerciseId, professorId, filters = {}) {
     try {
       let query = `
-      SELECT COUNT(*) as total
-FROM submissions s
-JOIN exercises e ON s.exercise_id = e.id
-WHERE s.exercise_id = :exerciseId
-    AND e.professor_id = :professorId
-    AND (:status IS NULL OR s.status = :status)
-    AND (:submitted_at IS NULL OR DATE(s.submitted_at) = :submitted_at);
+        SELECT COUNT(*) as total 
+        FROM submissions s 
+        JOIN exercises e ON s.exercise_id = e.id 
+        WHERE s.exercise_id = ? AND e.professor_id = ?
       `;
       const params = [exerciseId, professorId];
 
