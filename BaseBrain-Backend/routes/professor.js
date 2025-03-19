@@ -277,6 +277,78 @@ router.get('/corrections/exercise/:exercise_id', auth('professor'), async (req, 
   }
 });
 
+const { GetObjectCommand, getSignedUrl } = require('@aws-sdk/client-s3');
+const { S3RequestPresigner } = require('@aws-sdk/s3-request-presigner');
+const { createRequest } = require('@aws-sdk/util-create-request');
+
+router.get('/corrections/file-signed/:fileName', auth('professor'), async (req, res) => {
+  const { fileName } = req.params;
+
+  try {
+    const [correctionModel] = await pool.execute(
+      'SELECT cm.file_url, c.exercise_id FROM correction_models cm JOIN corrections c ON cm.correction_id = c.id JOIN exercises e ON c.exercise_id = e.id WHERE cm.file_url LIKE ? AND e.professor_id = ?',
+      [`%${fileName}`, req.user.id]
+    );
+
+    if (!correctionModel || correctionModel.length === 0) {
+      return res.status(404).json({ error: 'Fichier non trouvé ou non autorisé' });
+    }
+
+    const objectName = fileName; // Extrait depuis fileName directement
+    const params = {
+      Bucket: process.env.MINIO_BUCKET || 'base-brain-bucket',
+      Key: `corrections/${objectName}`,
+    };
+
+    const request = await createRequest(s3Client, new GetObjectCommand(params));
+    const signedUrl = await getSignedUrl(s3Client, new S3RequestPresigner({ ...s3Client.config }), {
+      url: request.url,
+      expiresIn: 3600, // URL valide pendant 1 heure
+    });
+
+    res.json({ signedUrl });
+  } catch (err) {
+    console.error('Erreur lors de la génération de l’URL signée:', err);
+    res.status(500).json({ error: 'Erreur lors de la génération de l’URL', details: err.message });
+  }
+});
+
+
+// Télécharger un fichier depuis Minio
+router.get('/corrections/file/:fileName', auth('professor'), async (req, res) => {
+  const { fileName } = req.params;
+
+  try {
+    // Vérifier si le fichier appartient à une correction du professeur
+    const [correctionModel] = await pool.execute(
+      'SELECT cm.file_url, c.exercise_id FROM correction_models cm JOIN corrections c ON cm.correction_id = c.id JOIN exercises e ON c.exercise_id = e.id WHERE cm.file_url LIKE ? AND e.professor_id = ?',
+      [`%${fileName}`, req.user.id]
+    );
+
+    if (!correctionModel || correctionModel.length === 0) {
+      return res.status(404).json({ error: 'Fichier non trouvé ou non autorisé' });
+    }
+
+    // Extraire le chemin de l'objet Minio
+    const fileUrl = correctionModel[0].file_url;
+    const objectName = fileUrl.split('/corrections/')[1]; // Extrait le nom de l'objet (par exemple, 1742175140015-871175921.pdf)
+    const bucketName = process.env.MINIO_BUCKET || 'base-brain-bucket';
+
+    // Télécharger le fichier depuis Minio
+    const params = {
+      Bucket: bucketName,
+      Key: `corrections/${objectName}`,
+    };
+
+    const fileStream = await s3Client.send(new GetObjectCommand(params));
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${fileName}"`); // 'inline' pour prévisualisation
+    fileStream.Body.pipe(res);
+  } catch (err) {
+    console.error('Erreur lors de la récupération du fichier depuis Minio:', err);
+    res.status(500).json({ error: 'Erreur lors de la récupération du fichier', details: err.message });
+  }
+});
 // Consulter une soumission
 router.get('/submissions/:submissionId', auth('professor'), async (req, res) => {
   const { submissionId } = req.params;

@@ -227,7 +227,7 @@ const processCorrection = async (submissionId, filePath, exerciseId, correctionM
   let decryptedFilePath;
   try {
     // Récupérer la soumission pour obtenir les clés de chiffrement
-    const submission = await Submission.findById(submissionId);
+    const submission = await Submission.findByIdForStudent(submissionId);
     if (!submission) {
       throw new Error('Soumission non trouvée');
     }
@@ -253,15 +253,16 @@ const processCorrection = async (submissionId, filePath, exerciseId, correctionM
     await Submission.update(submissionId, {
       note: result.overallGrade,
       feedback: feedback,
-      status: 'completed',
+      status: 'evaluated',
     });
+
     console.log(`Correction terminée pour la soumission ${submissionId}`);
   } catch (error) {
     console.error(`Erreur lors de la correction de la soumission ${submissionId}:`, error);
     await Submission.update(submissionId, {
       note: 0,
       feedback: `Erreur lors de la correction : ${error.message}`,
-      status: 'failed',
+      status: 'pending',
     });
   } finally {
     // Supprimer les fichiers temporaires
@@ -362,6 +363,55 @@ router.get('/submissions/:submissionId', auth('student'), async (req, res) => {
   } catch (err) {
     console.error('Erreur lors de la récupération de la soumission :', err);
     res.status(500).json({ error: 'Erreur serveur', details: err.message });
+  }
+});
+
+// Lister les corrections d’un exercice du professeur
+router.get('/corrections/exercise/:exercise_id', auth('student'), async (req, res) => {
+  const { exercise_id } = req.params;
+  const { title, created_at, page = 1, limit = 10 } = req.query;
+  const professor_id = req.user.id;
+
+  try {
+    if (!exercise_id || isNaN(exercise_id)) {
+      return res.status(400).json({ error: 'ID de l\'exercice invalide' });
+    }
+
+    const [exercise] = await pool.execute('SELECT id FROM exercises WHERE id = ? ', [exercise_id, professor_id]);
+    if (!exercise || exercise.length === 0) {
+      return res.status(404).json({ error: 'Exercice non trouvé ou non autorisé' });
+    }
+
+    const filters = {};
+    if (title) filters.title = title;
+    if (created_at && !/^\d{4}-\d{2}-\d{2}$/.test(created_at)) {
+      return res.status(400).json({ error: 'Le format de created_at doit être YYYY-MM-DD' });
+    }
+    if (created_at) filters.created_at = created_at;
+
+    const offset = (page - 1) * limit;
+    const corrections = await Correction.findByExerciseId(exercise_id, filters, { page, limit, offset });
+
+    if (corrections.length === 0) {
+      return res.status(404).json({ error: 'Aucune correction disponible pour cet exercice avec ces filtres' });
+    }
+
+    const totalCorrections = await Correction.countByExerciseId(exercise_id, filters);
+    const totalPages = Math.ceil(totalCorrections / limit);
+
+    // Ajouter les modèles associés
+    for (const correction of corrections) {
+      const [models] = await pool.execute('SELECT * FROM correction_models WHERE correction_id = ?', [correction.id]);
+      correction.models = models;
+    }
+
+    res.json({
+      corrections,
+      pagination: { page: parseInt(page), limit: parseInt(limit), totalCorrections, totalPages },
+    });
+  } catch (err) {
+    console.error('Erreur lors de la récupération des corrections :', err);
+    res.status(500).json({ error: 'Erreur lors de la récupération des corrections', details: err.message });
   }
 });
 
