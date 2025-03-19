@@ -10,6 +10,11 @@ const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3'); // Compati
 const router = express.Router();
 const { updateCorrectionModel } = require('../services/correctionService');
 const pool = require('../config/database');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner'); 
+// const { GetObjectCommand, getSignedUrl } = require('@aws-sdk/client-s3');
+const { GetObjectCommand } = require('@aws-sdk/client-s3');
+const { S3RequestPresigner } = require('@aws-sdk/s3-request-presigner');
+const { createRequest } = require('@aws-sdk/util-create-request');
 
 // Configuration de MinIO avec l'API S3
 const s3Client = new S3Client({
@@ -277,9 +282,6 @@ router.get('/corrections/exercise/:exercise_id', auth('professor'), async (req, 
   }
 });
 
-const { GetObjectCommand, getSignedUrl } = require('@aws-sdk/client-s3');
-const { S3RequestPresigner } = require('@aws-sdk/s3-request-presigner');
-const { createRequest } = require('@aws-sdk/util-create-request');
 
 router.get('/corrections/file-signed/:fileName', auth('professor'), async (req, res) => {
   const { fileName } = req.params;
@@ -300,9 +302,9 @@ router.get('/corrections/file-signed/:fileName', auth('professor'), async (req, 
       Key: `corrections/${objectName}`,
     };
 
-    const request = await createRequest(s3Client, new GetObjectCommand(params));
-    const signedUrl = await getSignedUrl(s3Client, new S3RequestPresigner({ ...s3Client.config }), {
-      url: request.url,
+    // Générer l'URL signée
+    const command = new GetObjectCommand(params);
+    const signedUrl = await getSignedUrl(s3Client, command, {
       expiresIn: 3600, // URL valide pendant 1 heure
     });
 
@@ -312,7 +314,6 @@ router.get('/corrections/file-signed/:fileName', auth('professor'), async (req, 
     res.status(500).json({ error: 'Erreur lors de la génération de l’URL', details: err.message });
   }
 });
-
 
 // Télécharger un fichier depuis Minio
 router.get('/corrections/file/:fileName', auth('professor'), async (req, res) => {
