@@ -219,7 +219,6 @@ function ProfessorCorrection() {
                     <TableCell sx={{ fontWeight: "bold" }}>Titre</TableCell>
                     <TableCell sx={{ fontWeight: "bold" }}>Description</TableCell>
                     <TableCell sx={{ fontWeight: "bold" }}>Fichiers</TableCell>
-                    <TableCell sx={{ fontWeight: "bold" }}>Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -242,16 +241,6 @@ function ProfessorCorrection() {
                           ))
                         ) : (
                           <Typography>Aucun fichier disponible</Typography>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {correction.models && correction.models.length > 0 && (
-                          <IconButton
-                            onClick={() => handleDownload(correction.models[0].file_url)}
-                            sx={{ color: "#5b21b6" }}
-                          >
-                            <DownloadIcon />
-                          </IconButton>
                         )}
                       </TableCell>
                     </TableRow>

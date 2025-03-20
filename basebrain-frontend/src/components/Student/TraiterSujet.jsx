@@ -9,12 +9,13 @@ import {
   Button,
   Alert,
   CircularProgress,
+  Modal,
 } from "@mui/material";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
-import SearchIcon from "@mui/icons-material/Search";
+import VisibilityIcon from "@mui/icons-material/Visibility";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import { useNavigate } from "react-router-dom";
-import { getExercises, postSubmission } from "../../services/api";
+import { getExercises, postSubmission, getExerciseFile } from "../../services/api";
 
 function TraiterSujet() {
   const [exercises, setExercises] = useState([]);
@@ -24,6 +25,8 @@ function TraiterSujet() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [file, setFile] = useState(null);
+  const [selectedPdfUrl, setSelectedPdfUrl] = useState(null);
+  const [loadingPdf, setLoadingPdf] = useState(false);
   const navigate = useNavigate();
 
   // Récupérer la liste des exercices
@@ -81,6 +84,34 @@ function TraiterSujet() {
     exercise.title.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  // Récupérer le fichier PDF de l'exercice
+  const handleViewExerciseFile = async (fileUrl) => {
+    setLoadingPdf(true);
+    setError("");
+    try {
+      const fileName = fileUrl.split("/").pop();
+      console.log("Tentative de récupération du fichier d'exercice:", fileName);
+      const fileBlob = await getExerciseFile(fileName);
+      const blobUrl = URL.createObjectURL(fileBlob);
+      console.log("URL du blob générée:", blobUrl);
+      setSelectedPdfUrl(blobUrl);
+    } catch (err) {
+      console.error("Erreur lors de la récupération du fichier d'exercice:", err);
+      setError("Impossible de charger le fichier PDF de l'exercice : " + err.message);
+    } finally {
+      setLoadingPdf(false);
+    }
+  };
+
+  const handleCloseModal = () => {
+    if (selectedPdfUrl) {
+      URL.revokeObjectURL(selectedPdfUrl);
+    }
+    setSelectedPdfUrl(null);
+    setLoadingPdf(false);
+    setError("");
+  };
+
   // Soumettre la soumission
   const handleSubmit = async () => {
     if (!file) {
@@ -105,7 +136,7 @@ function TraiterSujet() {
 
       // Faire disparaître le message après 3 secondes et rediriger
       setTimeout(() => {
-        setSuccess(""); // Efface le message
+        setSuccess("");
         navigate("/dashboard");
       }, 3000);
     } catch (err) {
@@ -174,6 +205,26 @@ function TraiterSujet() {
                 <Typography variant="h6" gutterBottom align="center" sx={{ mb: 2 }}>
                   Uploadez votre solution
                 </Typography>
+                <Box sx={{ display: "flex", justifyContent: "center", mb: 2 }}>
+                  <Button
+                    variant="outlined"
+                    startIcon={<VisibilityIcon />}
+                    onClick={() => {
+                      const selectedExercise = exercises.find(
+                        (ex) => ex.id === parseInt(selectedExerciseId)
+                      );
+                      if (selectedExercise && selectedExercise.content) {
+                        handleViewExerciseFile(selectedExercise.content);
+                      } else {
+                        setError("Aucun fichier PDF associé à cet exercice.");
+                      }
+                    }}
+                    sx={{ color: "#5b21b6", borderColor: "#5b21b6" }}
+                    disabled={loadingPdf}
+                  >
+                    Voir le sujet
+                  </Button>
+                </Box>
                 <Box
                   {...getRootProps()}
                   sx={{
@@ -237,8 +288,52 @@ function TraiterSujet() {
           </>
         )}
       </Box>
+
+      <Modal
+        open={!!selectedPdfUrl || loadingPdf}
+        onClose={handleCloseModal}
+        disableEnforceFocus
+        aria-labelledby="modal-pdf-title"
+        aria-describedby="modal-pdf-description"
+        sx={{ display: "flex", alignItems: "center", justifyContent: "center" }}
+      >
+        <Box
+          sx={{
+            position: "relative",
+            width: "80%",
+            height: "80%",
+            bgcolor: "background.paper",
+            border: "2px solid #000",
+            boxShadow: 24,
+            p: 4,
+            overflow: "auto",
+          }}
+        >
+          <Button onClick={handleCloseModal} sx={{ mb: 2, color: "#5b21b6" }}>
+            Fermer
+          </Button>
+          {loadingPdf ? (
+            <Box sx={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100%" }}>
+              <CircularProgress />
+            </Box>
+          ) : selectedPdfUrl ? (
+            <iframe
+              src={selectedPdfUrl}
+              title="PDF Viewer"
+              style={{ width: "100%", height: "100%", border: "none" }}
+              onError={(e) => {
+                console.error("Erreur iframe:", e);
+                setError("Erreur lors du chargement du PDF.");
+                handleCloseModal();
+              }}
+            />
+          ) : (
+            <Typography>Erreur lors du chargement du PDF.</Typography>
+          )}
+        </Box>
+      </Modal>
     </Container>
   );
 }
 
-export default TraiterSujet;    
+export default TraiterSujet;

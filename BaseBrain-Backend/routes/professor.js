@@ -6,6 +6,7 @@ const Submission = require('../models/submission');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const fsPromises = require('fs').promises; // Ajoute cette ligne
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3'); // Compatible avec MinIO
 const router = express.Router();
 const { updateCorrectionModel } = require('../services/correctionService');
@@ -15,6 +16,7 @@ const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { GetObjectCommand } = require('@aws-sdk/client-s3');
 const { S3RequestPresigner } = require('@aws-sdk/s3-request-presigner');
 const { createRequest } = require('@aws-sdk/util-create-request');
+const crypto = require('crypto');
 
 // Configuration de MinIO avec l'API S3
 const s3Client = new S3Client({
@@ -49,6 +51,76 @@ const upload = multer({
     }
   },
 });
+
+// Utilitaire pour télécharger un fichier depuis MinIO
+const downloadFromS3 = async (fileUrl, localPath) => {
+  try {
+    const urlParts = fileUrl.split('/');
+    const key = urlParts.slice(-2).join('/'); // Ex: submissions/1742218354321-259441615.pdf.enc
+    const bucketName = process.env.MINIO_BUCKET || 'base-brain-bucket';
+
+    console.log(`Téléchargement de ${key} depuis le bucket ${bucketName} vers ${localPath}`);
+
+    const params = {
+      Bucket: bucketName,
+      Key: key,
+    };
+
+    const command = new GetObjectCommand(params);
+    const response = await s3Client.send(command);
+    const fileStream = response.Body;
+
+    await new Promise((resolve, reject) => {
+      const writeStream = fs.createWriteStream(localPath);
+      fileStream.pipe(writeStream)
+        .on('error', (err) => {
+          console.error(`Erreur lors de l'écriture du fichier: ${err.message}`);
+          reject(err);
+        })
+        .on('finish', () => {
+          console.log(`Fichier téléchargé avec succès: ${localPath}`);
+          resolve();
+        });
+    });
+  } catch (err) {
+    console.error(`Erreur lors du téléchargement depuis MinIO: ${err.message}`);
+    throw new Error(`Erreur lors du téléchargement depuis MinIO: ${err.message}`);
+  }
+};
+
+const decryptFile = async (encryptedFilePath, keyHex, ivHex) => {
+  try {
+    console.log(`Déchiffrement du fichier: ${encryptedFilePath}`);
+    console.log(`Clé: ${keyHex}, IV: ${ivHex}`);
+
+    const key = Buffer.from(keyHex, 'hex');
+    const iv = Buffer.from(ivHex, 'hex');
+
+    const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+
+    const input = fs.createReadStream(encryptedFilePath);
+    const decryptedFilePath = encryptedFilePath.replace('.enc', '');
+    const output = fs.createWriteStream(decryptedFilePath);
+
+    input.pipe(decipher).pipe(output);
+
+    await new Promise((resolve, reject) => {
+      output.on('finish', () => {
+        console.log(`Fichier déchiffré avec succès: ${decryptedFilePath}`);
+        resolve();
+      });
+      output.on('error', (err) => {
+        console.error(`Erreur lors de l'écriture du fichier déchiffré: ${err.message}`);
+        reject(err);
+      });
+    });
+
+    return decryptedFilePath;
+  } catch (err) {
+    console.error(`Erreur lors du déchiffrement: ${err.message}`);
+    throw new Error(`Erreur lors du déchiffrement: ${err.message}`);
+  }
+};
 
 // Créer le dossier uploads s’il n’existe pas
 const uploadDir = 'uploads';
@@ -161,6 +233,41 @@ router.get('/exercises', auth('professor'), async (req, res) => {
   } catch (err) {
     console.error('Erreur lors de la récupération des exercices :', err);
     res.status(500).json({ error: 'Erreur lors de la récupération des exercices', details: err.message });
+  }
+});
+
+router.get('/exercises/file-signed/:fileName', auth('professor'), async (req, res) => {
+  const { fileName } = req.params;
+
+  try {
+    console.log(`Recherche du fichier d'exercice: ${fileName}`);
+
+    const [exercise] = await pool.execute(
+      'SELECT content FROM exercises WHERE LOWER(content) LIKE LOWER(?)',
+      [`%${fileName}%`]
+    );
+
+    console.log('Résultat de la requête SQL:', exercise);
+
+    if (!exercise || exercise.length === 0) {
+      return res.status(404).json({ error: 'Fichier non trouvé ou non autorisé' });
+    }
+
+    const objectName = fileName;
+    const params = {
+      Bucket: process.env.MINIO_BUCKET || 'base-brain-bucket',
+      Key: `exercises/${objectName}`,
+    };
+
+    const command = new GetObjectCommand(params);
+    const signedUrl = await getSignedUrl(s3Client, command, {
+      expiresIn: 3600,
+    });
+
+    res.json({ signedUrl });
+  } catch (err) {
+    console.error('Erreur lors de la génération de l’URL signée pour l’exercice:', err);
+    res.status(500).json({ error: 'Erreur lors de la génération de l’URL', details: err.message });
   }
 });
 
@@ -315,6 +422,190 @@ router.get('/corrections/file-signed/:fileName', auth('professor'), async (req, 
   }
 });
 
+// Télécharger un fichier d'exercice depuis MinIO (professeur)
+router.get('/submissions/file/:fileName', auth('professor'), async (req, res) => {
+  const { fileName } = req.params;
+  const professor_id = req.user.id;
+
+  let tempFilePath;
+  let decryptedFilePath;
+
+  try {
+    console.log(`Recherche du fichier: ${fileName} pour le professeur: ${professor_id}`);
+
+    // Vérifier si le fichier appartient à une soumission d'un exercice du professeur
+    const [submission] = await pool.execute(
+      'SELECT s.file_path, s.encryption_key, s.encryption_iv, s.exercise_id FROM submissions s JOIN exercises e ON s.exercise_id = e.id WHERE s.file_path LIKE ? AND e.professor_id = ?',
+      [`%${fileName}`, professor_id]
+    );
+
+    console.log('Résultat de la requête SQL:', submission);
+
+    if (!submission || submission.length === 0) {
+      return res.status(404).json({ error: 'Fichier non trouvé ou non autorisé' });
+    }
+
+    if (!submission[0].encryption_key || !submission[0].encryption_iv) {
+      return res.status(500).json({ error: 'Clés de chiffrement manquantes' });
+    }
+
+    // Extraire le chemin de l'objet MinIO
+    const fileUrl = submission[0].file_path;
+    const objectName = fileUrl.split('/submissions/')[1];
+    const bucketName = process.env.MINIO_BUCKET || 'base-brain-bucket';
+
+    console.log(`Téléchargement depuis MinIO: ${fileUrl}`);
+    console.log(`ObjectName: ${objectName}, Bucket: ${bucketName}`);
+
+    // Télécharger le fichier chiffré depuis MinIO
+    tempFilePath = path.join('uploads', `temp_${Date.now()}_${fileName}`);
+    console.log(`Téléchargement vers: ${tempFilePath}`);
+    await downloadFromS3(fileUrl, tempFilePath);
+
+    // Vérifier si le fichier a été téléchargé
+    if (!fs.existsSync(tempFilePath)) {
+      throw new Error('Le fichier n\'a pas été téléchargé correctement depuis MinIO');
+    }
+
+    // Déchiffrer le fichier
+    console.log('Déchiffrement du fichier...');
+    decryptedFilePath = await decryptFile(tempFilePath, submission[0].encryption_key, submission[0].encryption_iv);
+
+    // Vérifier si le fichier déchiffré existe
+    if (!fs.existsSync(decryptedFilePath)) {
+      throw new Error('Le fichier déchiffré n\'a pas été créé correctement');
+    }
+
+    // Envoyer le fichier déchiffré
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${fileName.replace('.enc', '')}"`);
+    const fileStream = fs.createReadStream(decryptedFilePath);
+    fileStream.pipe(res);
+  } catch (err) {
+    console.error('Erreur lors de la récupération de la soumission depuis MinIO:', err);
+    res.status(500).json({ error: 'Erreur lors de la récupération du fichier', details: err.message });
+  } finally {
+    if (tempFilePath && fs.existsSync(tempFilePath)) {
+      console.log(`Suppression du fichier temporaire: ${tempFilePath}`);
+      await fsPromises.unlink(tempFilePath).catch(console.error);
+    }
+    if (decryptedFilePath && fs.existsSync(decryptedFilePath)) {
+      console.log(`Suppression du fichier déchiffré: ${decryptedFilePath}`);
+      await fsPromises.unlink(decryptedFilePath).catch(console.error);
+    }
+  }
+});
+
+// Générer une URL signée pour une soumission (professeur)
+router.get('/submissions/file-signed/:fileName', auth('professor'), async (req, res) => {
+  const { fileName } = req.params;
+  const professor_id = req.user.id;
+
+  try {
+    // Vérifier si le fichier appartient à une soumission d'un exercice du professeur
+    const [submission] = await pool.execute(
+      'SELECT s.file_path FROM submissions s JOIN exercises e ON s.exercise_id = e.id WHERE s.file_path LIKE ? AND e.professor_id = ?',
+      [`%${fileName}`, professor_id]
+    );
+
+    if (!submission || submission.length === 0) {
+      return res.status(404).json({ error: 'Fichier non trouvé ou non autorisé' });
+    }
+
+    const objectName = fileName; // Extrait depuis fileName directement
+    const params = {
+      Bucket: process.env.MINIO_BUCKET || 'base-brain-bucket',
+      Key: `submissions/${objectName}`,
+    };
+
+    // Générer l'URL signée
+    const command = new GetObjectCommand(params);
+    const signedUrl = await getSignedUrl(s3Client, command, {
+      expiresIn: 3600, // URL valide pendant 1 heure
+    });
+
+    res.json({ signedUrl });
+  } catch (err) {
+    console.error('Erreur lors de la génération de l’URL signée pour la soumission:', err);
+    res.status(500).json({ error: 'Erreur lors de la génération de l’URL', details: err.message });
+  }
+});
+
+// Télécharger une soumission depuis MinIO (professeur)
+router.get('/submissions/file/:fileName', auth('professor'), async (req, res) => {
+  const { fileName } = req.params;
+  const professor_id = req.user.id;
+
+  let tempFilePath;
+  let decryptedFilePath;
+
+  try {
+    console.log(`Recherche du fichier: ${fileName} pour le professeur: ${professor_id}`);
+
+    // Vérifier si le fichier appartient à une soumission d'un exercice du professeur
+    const [submission] = await pool.execute(
+      'SELECT s.file_path, s.encryption_key, s.encryption_iv, s.exercise_id FROM submissions s JOIN exercises e ON s.exercise_id = e.id WHERE s.file_path LIKE ? AND e.professor_id = ?',
+      [`%${fileName}`, professor_id]
+    );
+
+    console.log('Résultat de la requête SQL:', submission);
+
+    if (!submission || submission.length === 0) {
+      return res.status(404).json({ error: 'Fichier non trouvé ou non autorisé' });
+    }
+
+    if (!submission[0].encryption_key || !submission[0].encryption_iv) {
+      return res.status(500).json({ error: 'Clés de chiffrement manquantes' });
+    }
+
+    // Extraire le chemin de l'objet MinIO
+    const fileUrl = submission[0].file_path;
+    const objectName = fileUrl.split('/submissions/')[1];
+    const bucketName = process.env.MINIO_BUCKET || 'base-brain-bucket';
+
+    console.log(`Téléchargement depuis MinIO: ${fileUrl}`);
+    console.log(`ObjectName: ${objectName}, Bucket: ${bucketName}`);
+
+    // Télécharger le fichier chiffré depuis MinIO
+    tempFilePath = path.join('uploads', `temp_${Date.now()}_${fileName}`);
+    console.log(`Téléchargement vers: ${tempFilePath}`);
+    await downloadFromS3(fileUrl, tempFilePath);
+
+    // Vérifier si le fichier a été téléchargé
+    if (!fs.existsSync(tempFilePath)) {
+      throw new Error('Le fichier n\'a pas été téléchargé correctement depuis MinIO');
+    }
+
+    // Déchiffrer le fichier
+    console.log('Déchiffrement du fichier...');
+    decryptedFilePath = await decryptFile(tempFilePath, submission[0].encryption_key, submission[0].encryption_iv);
+
+    // Vérifier si le fichier déchiffré existe
+    if (!fs.existsSync(decryptedFilePath)) {
+      throw new Error('Le fichier déchiffré n\'a pas été créé correctement');
+    }
+
+    // Envoyer le fichier déchiffré
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${fileName.replace('.enc', '')}"`);
+    const fileStream = fs.createReadStream(decryptedFilePath);
+    fileStream.pipe(res);
+  } catch (err) {
+    console.error('Erreur lors de la récupération de la soumission depuis MinIO:', err);
+    res.status(500).json({ error: 'Erreur lors de la récupération du fichier', details: err.message });
+  } finally {
+    // Nettoyer les fichiers temporaires
+    if (tempFilePath && fs.existsSync(tempFilePath)) {
+      console.log(`Suppression du fichier temporaire: ${tempFilePath}`);
+      await fsPromises.unlink(tempFilePath).catch(console.error);
+    }
+    if (decryptedFilePath && fs.existsSync(decryptedFilePath)) {
+      console.log(`Suppression du fichier déchiffré: ${decryptedFilePath}`);
+      await fsPromises.unlink(decryptedFilePath).catch(console.error);
+    }
+  }
+});
+
 // Télécharger un fichier depuis Minio
 router.get('/corrections/file/:fileName', auth('professor'), async (req, res) => {
   const { fileName } = req.params;
@@ -350,6 +641,7 @@ router.get('/corrections/file/:fileName', auth('professor'), async (req, res) =>
     res.status(500).json({ error: 'Erreur lors de la récupération du fichier', details: err.message });
   }
 });
+
 // Consulter une soumission
 router.get('/submissions/:submissionId', auth('professor'), async (req, res) => {
   const { submissionId } = req.params;

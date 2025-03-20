@@ -14,12 +14,15 @@ import {
   MenuItem,
   FormControl,
   InputLabel,
+  Modal,
 } from "@mui/material";
+import VisibilityIcon from "@mui/icons-material/Visibility";
 import { useNavigate } from "react-router-dom";
 import {
   getSubmissionsForProfessorById,
   getExercisesForProfessor,
   putSubmission,
+  getSubmissionFile,
 } from "../../services/api";
 
 function ProfessorStudentList() {
@@ -32,61 +35,64 @@ function ProfessorStudentList() {
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [note, setNote] = useState("");
   const [feedback, setFeedback] = useState("");
+  const [selectedPdfUrl, setSelectedPdfUrl] = useState(null);
 
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
       try {
-        // Récupérer les exercices
         const exercisesResponse = await getExercisesForProfessor();
         const exercisesData = exercisesResponse.data.exercises || [];
         setExercises(exercisesData);
 
-        // Sélectionner le premier exercice par défaut si disponible
         if (exercisesData.length > 0 && !selectedExerciseId) {
           setSelectedExerciseId(exercisesData[0].id);
         }
 
-        // Récupérer les soumissions uniquement si un exercice est sélectionné
         if (selectedExerciseId) {
           const submissionsResponse = await getSubmissionsForProfessorById(selectedExerciseId);
           const submissions = submissionsResponse.data.submissions || [];
 
-          // Agréger les données par étudiant
+          console.log("Données brutes des soumissions:", submissionsResponse.data);
+
           const studentData = submissions.reduce((acc, submission) => {
             const exercise = exercisesData.find((e) => e.id === submission.exercise_id);
             const studentName = submission.student_name || `Étudiant ${submission.student_id}`;
-            if (!acc[submission.student_id]) {
+            if (!acc[submission.student_id] || new Date(submission.submitted_at) > new Date(acc[submission.student_id].submitted_at)) {
               acc[submission.student_id] = {
                 id: submission.student_id,
                 name: studentName,
                 note: submission.note || null,
                 submissionId: submission.id,
                 exerciseTitle: exercise ? exercise.title : "Inconnu",
+                fileUrl: submission.file_path,
+                submitted_at: submission.submitted_at,
               };
             }
             return acc;
           }, {});
 
           setStudents(Object.values(studentData));
-          console.log("Exercices:", exercisesResponse.data);
-          console.log("Soumissions:", submissionsResponse.data);
+          console.log("Étudiants après mapping:", studentData);
         }
       } catch (err) {
         console.error("Erreur lors de la récupération des données :", err);
-        setError("Impossible de charger la liste des étudiants. Vérifiez votre connexion ou contactez un administrateur.");
+        setError(
+          "Impossible de charger la liste des étudiants. Vérifiez votre connexion ou contactez un administrateur."
+        );
       } finally {
         setLoading(false);
       }
     };
 
     fetchData();
-  }, [selectedExerciseId]); // Recharger quand l'exercice change
+  }, [selectedExerciseId]);
 
   const handleOpenDialog = (student) => {
     setSelectedStudent(student);
     setNote(student.note?.toString() || "");
     setFeedback("");
+    console.log("Étudiant sélectionné pour le Dialog:", student);
   };
 
   const handleCloseDialog = () => {
@@ -122,6 +128,26 @@ function ProfessorStudentList() {
     }
   };
 
+  const handleViewSubmissionFile = async (fileUrl) => {
+    try {
+      const fileName = fileUrl.split("/").pop();
+      console.log("FileName envoyé à l'endpoint:", fileName);
+      const fileBlob = await getSubmissionFile(fileName);
+      const blobUrl = URL.createObjectURL(fileBlob);
+      setSelectedPdfUrl(blobUrl);
+    } catch (err) {
+      console.error("Erreur lors de la récupération du fichier:", err);
+      setError("Impossible de charger le fichier PDF soumis.");
+    }
+  };
+
+  const handleCloseModal = () => {
+    if (selectedPdfUrl) {
+      URL.revokeObjectURL(selectedPdfUrl);
+    }
+    setSelectedPdfUrl(null);
+  };
+
   if (loading) return <CircularProgress />;
 
   return (
@@ -131,7 +157,6 @@ function ProfessorStudentList() {
       </Typography>
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
-      {/* Sélection de l'exercice */}
       <FormControl fullWidth sx={{ mb: 2 }}>
         <InputLabel>Choisir un exercice</InputLabel>
         <Select
@@ -162,7 +187,7 @@ function ProfessorStudentList() {
           }}
         >
           <Typography>{`Étudiant: ${student.name}`}</Typography>
-          <Box>
+          <Box sx={{ display: "flex", alignItems: "center" }}>
             <Typography>{`Note: ${student.note !== null ? student.note : "Non évalué"}`}</Typography>
             <Button
               variant="contained"
@@ -196,6 +221,20 @@ function ProfessorStudentList() {
             rows={4}
             sx={{ mt: 2 }}
           />
+          {selectedStudent?.fileUrl ? (
+            <Button
+              variant="outlined"
+              startIcon={<VisibilityIcon />}
+              onClick={() => handleViewSubmissionFile(selectedStudent.fileUrl)}
+              sx={{ mt: 2, color: "#5b21b6", borderColor: "#5b21b6" }}
+            >
+              Voir le fichier soumis
+            </Button>
+          ) : (
+            <Typography sx={{ mt: 2, color: "#666" }}>
+              Aucun fichier soumis par l'étudiant.
+            </Typography>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={handleCloseDialog} color="primary">
@@ -211,6 +250,46 @@ function ProfessorStudentList() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <Modal
+        open={!!selectedPdfUrl}
+        onClose={handleCloseModal}
+        disableEnforceFocus
+        aria-labelledby="modal-pdf-title"
+        aria-describedby="modal-pdf-description"
+        sx={{ display: "flex", alignItems: "center", justifyContent: "center" }}
+      >
+        <Box
+          sx={{
+            position: "relative",
+            width: "80%",
+            height: "80%",
+            bgcolor: "background.paper",
+            border: "2px solid #000",
+            boxShadow: 24,
+            p: 4,
+            overflow: "auto",
+          }}
+        >
+          <Button onClick={handleCloseModal} sx={{ mb: 2, color: "#5b21b6" }}>
+            Fermer
+          </Button>
+          {selectedPdfUrl ? (
+            <iframe
+              src={selectedPdfUrl}
+              title="PDF Viewer"
+              style={{ width: "100%", height: "100%", border: "none" }}
+              onError={(e) => {
+                console.error("Erreur iframe:", e);
+                setError("Erreur lors du chargement du PDF.");
+                handleCloseModal();
+              }}
+            />
+          ) : (
+            <Typography>Chargement du PDF...</Typography>
+          )}
+        </Box>
+      </Modal>
     </Box>
   );
 }

@@ -13,11 +13,15 @@ import {
   ListItem,
   ListItemText,
   IconButton,
+  Modal,
+  Backdrop,
+  Fade,
 } from "@mui/material";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import ArrowForwardIosIcon from "@mui/icons-material/ArrowForwardIos";
+import CloseIcon from "@mui/icons-material/Close";
 import { useNavigate } from "react-router-dom";
-import { createExercise, getExercisesForProfessor } from "../../services/api";
+import { createExercise, getExercisesForProfessor, getSignedExerciseFileUrlProfessor} from "../../services/api";
 
 function ProfessorCreateExercise() {
   const [title, setTitle] = useState("");
@@ -29,9 +33,12 @@ function ProfessorCreateExercise() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [openModal, setOpenModal] = useState(false);
+  const [selectedExercise, setSelectedExercise] = useState(null);
+  const [signedUrl, setSignedUrl] = useState("");
   const navigate = useNavigate();
 
-  // Définir fetchExercises dans la portée du composant
+  // Récupérer la liste des exercices du professeur au montage
   const fetchExercises = async () => {
     setLoading(true);
     try {
@@ -53,7 +60,6 @@ function ProfessorCreateExercise() {
     }
   };
 
-  // Récupérer la liste des exercices du professeur au montage
   useEffect(() => {
     fetchExercises();
   }, []);
@@ -134,6 +140,32 @@ function ProfessorCreateExercise() {
     } finally {
       setLoading(false);
     }
+  };
+
+// Gérer l'ouverture du modal et récupérer l'URL signée si un fichier est présent
+const handleOpenModal = async (exercise) => {
+  setSelectedExercise(exercise);
+  setSignedUrl(""); // Réinitialiser l'URL signée
+
+  // Si l'exercice a un fichier (content commence par une URL MinIO), récupérer l'URL signée
+  if (exercise.content && exercise.content.includes("/exercises/")) {
+    try {
+      const fileName = exercise.content.split("/exercises/")[1]; // Extraire le nom du fichier
+      const { data } = await getSignedExerciseFileUrlProfessor(fileName); // Appeler l'API pour obtenir l'URL signée
+      setSignedUrl(data.signedUrl);
+    } catch (err) {
+      console.error("Erreur lors de la récupération de l'URL signée :", err);
+      setError("Impossible de charger le fichier de l'exercice.");
+    }
+  }
+
+  setOpenModal(true);
+};
+
+  const handleCloseModal = () => {
+    setOpenModal(false);
+    setSelectedExercise(null);
+    setSignedUrl("");
   };
 
   return (
@@ -257,6 +289,7 @@ function ProfessorCreateExercise() {
                   exercises.map((exercise) => (
                     <ListItem
                       key={exercise.id}
+                      onClick={() => handleOpenModal(exercise)}
                       sx={{
                         mb: 1,
                         backgroundColor: "#553883",
@@ -281,6 +314,78 @@ function ProfessorCreateExercise() {
           </>
         )}
       </Box>
+
+      {/* Modal pour afficher les détails de l'exercice */}
+      <Modal
+        open={openModal}
+        onClose={handleCloseModal}
+        closeAfterTransition
+        BackdropComponent={Backdrop}
+        BackdropProps={{
+          timeout: 500,
+        }}
+      >
+        <Fade in={openModal}>
+          <Box
+            sx={{
+              position: "absolute",
+              top: "50%",
+              left: "50%",
+              transform: "translate(-50%, -50%)",
+              width: "80%",
+              maxWidth: 800,
+              bgcolor: "background.paper",
+              boxShadow: 24,
+              p: 4,
+              borderRadius: 2,
+              maxHeight: "90vh",
+              overflowY: "auto",
+            }}
+          >
+            <Box sx={{ display: "flex", justifyContent: "space-between", mb: 2 }}>
+              <Typography variant="h6">
+                Détails de l'exercice : {selectedExercise?.title}
+              </Typography>
+              <IconButton onClick={handleCloseModal}>
+                <CloseIcon />
+              </IconButton>
+            </Box>
+
+            {selectedExercise && (
+              <>
+                <Typography variant="subtitle1" gutterBottom>
+                  <strong>Description :</strong> {selectedExercise.description}
+                </Typography>
+
+                {selectedExercise.content && !selectedExercise.content.includes("/exercises/") && (
+                  <Typography variant="subtitle1" gutterBottom>
+                    <strong>Contenu texte :</strong> {selectedExercise.content}
+                  </Typography>
+                )}
+
+                {signedUrl && (
+                  <Box sx={{ mt: 2 }}>
+                    <Typography variant="subtitle1" gutterBottom>
+                      <strong>Fichier associé :</strong>
+                    </Typography>
+                    <iframe
+                      src={signedUrl}
+                      title="Exercice PDF"
+                      style={{ width: "100%", height: "500px", border: "none" }}
+                    />
+                  </Box>
+                )}
+
+                {selectedExercise.content && selectedExercise.content.includes("/exercises/") && !signedUrl && (
+                  <Typography variant="subtitle1" color="error">
+                    Impossible de charger le fichier de l'exercice.
+                  </Typography>
+                )}
+              </>
+            )}
+          </Box>
+        </Fade>
+      </Modal>
     </Container>
   );
 }

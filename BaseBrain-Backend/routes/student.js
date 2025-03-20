@@ -9,6 +9,8 @@ const Submission = require('../models/submission');
 const Exercise = require('../models/exercise');
 const { analyzeSubmissionWithAI } = require('../services/aiService');
 const { S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+const pool = require('../config/database');
 
 const router = express.Router();
 
@@ -70,21 +72,74 @@ const uploadToS3 = async (filePath, fileName) => {
 };
 
 // Utilitaire pour télécharger un fichier depuis MinIO
+// const downloadFromS3 = async (fileUrl, localPath) => {
+//   try {
+//     const urlParts = fileUrl.split('/');
+//     const key = urlParts.slice(-2).join('/'); // Ex: submissions/1742218354321-259441615.pdf.enc
+//     const bucketName = process.env.MINIO_BUCKET || 'base-brain-bucket';
+
+//     console.log(`Téléchargement de ${key} depuis le bucket ${bucketName} vers ${localPath}`);
+
+//     const params = {
+//       Bucket: bucketName,
+//       Key: key,
+//     };
+
+//     const command = new GetObjectCommand(params);
+//     const response = await s3Client.send(command);
+//     const fileStream = response.Body;
+
+//     await new Promise((resolve, reject) => {
+//       const writeStream = fs.createWriteStream(localPath);
+//       fileStream.pipe(writeStream)
+//         .on('error', (err) => {
+//           console.error(`Erreur lors de l'écriture du fichier: ${err.message}`);
+//           reject(err);
+//         })
+//         .on('finish', () => {
+//           console.log(`Fichier téléchargé avec succès: ${localPath}`);
+//           resolve();
+//         });
+//     });
+//   } catch (err) {
+//     console.error(`Erreur lors du téléchargement depuis MinIO: ${err.message}`);
+//     throw new Error(`Erreur lors du téléchargement depuis MinIO: ${err.message}`);
+//   }
+// };
+
 const downloadFromS3 = async (fileUrl, localPath) => {
-  const urlParts = fileUrl.split('/');
-  const key = urlParts.slice(-2).join('/');
-  const params = {
-    Bucket: process.env.MINIO_BUCKET || 'base-brain-bucket',
-    Key: key,
-  };
-  const command = new GetObjectCommand(params);
-  const response = await s3Client.send(command);
-  const fileStream = response.Body;
-  await new Promise((resolve, reject) => {
-    fileStream.pipe(fs.createWriteStream(localPath))
-      .on('error', reject)
-      .on('finish', resolve);
-  });
+  try {
+    const urlParts = fileUrl.split('/');
+    const key = urlParts.slice(-2).join('/'); // Ex: corrections/1742175140015-871175921.pdf
+    const bucketName = process.env.MINIO_BUCKET || 'base-brain-bucket';
+
+    console.log(`Téléchargement de ${key} depuis le bucket ${bucketName} vers ${localPath}`);
+
+    const params = {
+      Bucket: bucketName,
+      Key: key,
+    };
+
+    const command = new GetObjectCommand(params);
+    const response = await s3Client.send(command);
+    const fileStream = response.Body;
+
+    await new Promise((resolve, reject) => {
+      const writeStream = fs.createWriteStream(localPath);
+      fileStream.pipe(writeStream)
+        .on('error', (err) => {
+          console.error(`Erreur lors de l'écriture du fichier: ${err.message}`);
+          reject(err);
+        })
+        .on('finish', () => {
+          console.log(`Fichier téléchargé avec succès: ${localPath}`);
+          resolve();
+        });
+    });
+  } catch (err) {
+    console.error(`Erreur lors du téléchargement depuis MinIO: ${err.message}`);
+    throw new Error(`Erreur lors du téléchargement depuis MinIO: ${err.message}`);
+  }
 };
 
 // Fonction pour chiffrer un fichier
@@ -103,18 +158,37 @@ const encryptFile = async (filePath) => {
 
 // Fonction pour déchiffrer un fichier
 const decryptFile = async (encryptedFilePath, keyHex, ivHex) => {
-  if (!keyHex || !ivHex) {
-    throw new Error('Clés de chiffrement manquantes');
+  try {
+    console.log(`Déchiffrement du fichier: ${encryptedFilePath}`);
+    console.log(`Clé: ${keyHex}, IV: ${ivHex}`);
+
+    const key = Buffer.from(keyHex, 'hex');
+    const iv = Buffer.from(ivHex, 'hex');
+
+    const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+
+    const input = fs.createReadStream(encryptedFilePath);
+    const decryptedFilePath = encryptedFilePath.replace('.enc', '');
+    const output = fs.createWriteStream(decryptedFilePath);
+
+    input.pipe(decipher).pipe(output);
+
+    await new Promise((resolve, reject) => {
+      output.on('finish', () => {
+        console.log(`Fichier déchiffré avec succès: ${decryptedFilePath}`);
+        resolve();
+      });
+      output.on('error', (err) => {
+        console.error(`Erreur lors de l'écriture du fichier déchiffré: ${err.message}`);
+        reject(err);
+      });
+    });
+
+    return decryptedFilePath;
+  } catch (err) {
+    console.error(`Erreur lors du déchiffrement: ${err.message}`);
+    throw new Error(`Erreur lors du déchiffrement: ${err.message}`);
   }
-  const algorithm = 'aes-256-cbc';
-  const key = Buffer.from(keyHex, 'hex');
-  const iv = Buffer.from(ivHex.slice(0, 32), 'hex');
-  const decipher = crypto.createDecipheriv(algorithm, key, iv);
-  const input = await fsPromises.readFile(encryptedFilePath);
-  const decrypted = Buffer.concat([decipher.update(input.slice(16)), decipher.final()]);
-  const decryptedFilePath = encryptedFilePath.replace('.enc', '');
-  await fsPromises.writeFile(decryptedFilePath, decrypted);
-  return decryptedFilePath;
 };
 
 // Fonction pour détecter le plagiat (simplifiée avec Jaccard)
@@ -329,7 +403,14 @@ router.get('/submissions', auth('student'), async (req, res) => {
   const student_id = req.user.id;
 
   try {
-    const submissions = await Submission.findByStudent(student_id);
+    const [submissions] = await pool.execute(
+      `SELECT s.id, s.exercise_id, s.file_path, s.note, s.feedback, s.status, s.submitted_at, e.title AS exercise_title
+       FROM submissions s
+       JOIN exercises e ON s.exercise_id = e.id
+       WHERE s.student_id = ?`,
+      [student_id]
+    );
+    console.log('Soumissions récupérées:', submissions); // Log pour débogage
     res.json(submissions);
   } catch (err) {
     console.error('Erreur lors de la récupération des soumissions :', err);
@@ -366,20 +447,31 @@ router.get('/submissions/:submissionId', auth('student'), async (req, res) => {
   }
 });
 
-// Lister les corrections d’un exercice du professeur
+// Lister les corrections d’un exercice pour l'étudiant
 router.get('/corrections/exercise/:exercise_id', auth('student'), async (req, res) => {
   const { exercise_id } = req.params;
+  const student_id = req.user.id;
   const { title, created_at, page = 1, limit = 10 } = req.query;
-  const professor_id = req.user.id;
 
   try {
     if (!exercise_id || isNaN(exercise_id)) {
       return res.status(400).json({ error: 'ID de l\'exercice invalide' });
     }
 
-    const [exercise] = await pool.execute('SELECT id FROM exercises WHERE id = ? ', [exercise_id, professor_id]);
+    // Vérifier si l'étudiant a soumis une réponse à cet exercice
+    const [submission] = await pool.execute(
+      'SELECT id FROM submissions WHERE exercise_id = ? AND student_id = ?',
+      [exercise_id, student_id]
+    );
+
+    if (!submission || submission.length === 0) {
+      return res.status(403).json({ error: 'Vous n\'avez pas soumis de réponse à cet exercice, accès non autorisé' });
+    }
+
+    // Vérifier si l'exercice existe
+    const [exercise] = await pool.execute('SELECT id FROM exercises WHERE id = ?', [exercise_id]);
     if (!exercise || exercise.length === 0) {
-      return res.status(404).json({ error: 'Exercice non trouvé ou non autorisé' });
+      return res.status(404).json({ error: 'Exercice non trouvé' });
     }
 
     const filters = {};
@@ -390,18 +482,41 @@ router.get('/corrections/exercise/:exercise_id', auth('student'), async (req, re
     if (created_at) filters.created_at = created_at;
 
     const offset = (page - 1) * limit;
-    const corrections = await Correction.findByExerciseId(exercise_id, filters, { page, limit, offset });
+    let query = 'SELECT id, title, description, created_at FROM corrections WHERE exercise_id = ?';
+    const queryParams = [exercise_id];
+
+    if (filters.title) {
+      query += ' AND title LIKE ?';
+      queryParams.push(`%${filters.title}%`);
+    }
+    if (filters.created_at) {
+      query += ' AND DATE(created_at) = ?';
+      queryParams.push(filters.created_at);
+    }
+
+    query += ' LIMIT ? OFFSET ?';
+    queryParams.push(parseInt(limit), parseInt(offset));
+
+    const [corrections] = await pool.execute(query, queryParams);
 
     if (corrections.length === 0) {
       return res.status(404).json({ error: 'Aucune correction disponible pour cet exercice avec ces filtres' });
     }
 
-    const totalCorrections = await Correction.countByExerciseId(exercise_id, filters);
+    const [total] = await pool.execute(
+      'SELECT COUNT(*) as count FROM corrections WHERE exercise_id = ?',
+      [exercise_id]
+    );
+    const totalCorrections = total[0].count;
     const totalPages = Math.ceil(totalCorrections / limit);
 
-    // Ajouter les modèles associés
+    // Ajouter les modèles associés (fichiers de correction)
     for (const correction of corrections) {
-      const [models] = await pool.execute('SELECT * FROM correction_models WHERE correction_id = ?', [correction.id]);
+      const [models] = await pool.execute(
+        'SELECT id, file_url, model_name, description, configuration FROM correction_models WHERE correction_id = ?',
+        [correction.id]
+      );
+      console.log(`Modèles pour correction ${correction.id}:`, models); // Log pour débogage
       correction.models = models;
     }
 
@@ -414,7 +529,258 @@ router.get('/corrections/exercise/:exercise_id', auth('student'), async (req, re
     res.status(500).json({ error: 'Erreur lors de la récupération des corrections', details: err.message });
   }
 });
+// Générer une URL signée pour un fichier d'exercice (étudiant)
+router.get('/exercises/file-signed/:fileName', auth('student'), async (req, res) => {
+  const { fileName } = req.params;
 
+  try {
+    // Vérifier si le fichier appartient à un exercice accessible à l'étudiant
+    const [exercise] = await pool.execute(
+      'SELECT content FROM exercises WHERE content LIKE ?',
+      [`%${fileName}`]
+    );
+
+    if (!exercise || exercise.length === 0) {
+      return res.status(404).json({ error: 'Fichier non trouvé ou non autorisé' });
+    }
+
+    const objectName = fileName; // Extrait depuis fileName directement
+    const params = {
+      Bucket: process.env.MINIO_BUCKET || 'base-brain-bucket',
+      Key: `exercises/${objectName}`,
+    };
+
+    // Générer l'URL signée
+    const command = new GetObjectCommand(params);
+    const signedUrl = await getSignedUrl(s3Client, command, {
+      expiresIn: 3600, // URL valide pendant 1 heure
+    });
+
+    res.json({ signedUrl });
+  } catch (err) {
+    console.error('Erreur lors de la génération de l’URL signée pour l’exercice:', err);
+    res.status(500).json({ error: 'Erreur lors de la génération de l’URL', details: err.message });
+  }
+});
+
+// Télécharger un fichier d'exercice depuis MinIO (étudiant)
+// router.get('/exercises/file/:fileName', auth('student'), async (req, res) => {
+//   const { fileName } = req.params;
+//   let tempFilePath;
+
+//   try {
+//     console.log(`Recherche du fichier d'exercice: ${fileName}`);
+
+//     // Vérifier si le fichier appartient à un exercice accessible à l'étudiant
+//     const [exercise] = await pool.execute(
+//       'SELECT content FROM exercises WHERE content LIKE ?',
+//       [`%${fileName}`]
+//     );
+
+//     if (!exercise || exercise.length === 0) {
+//       return res.status(404).json({ error: 'Fichier non trouvé ou non autorisé' });
+//     }
+
+//     // Extraire le chemin de l'objet MinIO
+//     const fileUrl = exercise[0].content;
+//     console.log(`Téléchargement depuis MinIO: ${fileUrl}`);
+
+//     // Télécharger le fichier depuis MinIO
+//     tempFilePath = path.join('uploads', `temp_${Date.now()}_${fileName}`);
+//     await downloadFromS3(fileUrl, tempFilePath);
+
+//     // Vérifier si le fichier a été téléchargé
+//     if (!fs.existsSync(tempFilePath)) {
+//       throw new Error('Le fichier n\'a pas été téléchargé correctement depuis MinIO');
+//     }
+
+//     // Envoyer le fichier
+//     res.setHeader('Content-Type', 'application/pdf');
+//     res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+//     const fileStream = fs.createReadStream(tempFilePath);
+//     fileStream.pipe(res);
+//   } catch (err) {
+//     console.error('Erreur lors de la récupération du fichier d’exercice depuis MinIO:', err);
+//     res.status(500).json({ error: 'Erreur lors de la récupération du fichier', details: err.message });
+//   } finally {
+//     if (tempFilePath && fs.existsSync(tempFilePath)) {
+//       console.log(`Suppression du fichier temporaire: ${tempFilePath}`);
+//       await fsPromises.unlink(tempFilePath).catch(console.error);
+//     }
+//   }
+// });
+
+router.get('/exercises/file/:fileName', auth('student'), async (req, res) => {
+  const { fileName } = req.params;
+  let tempFilePath;
+
+  try {
+    console.log(`Recherche du fichier d'exercice: ${fileName}`);
+
+    // Log de la requête SQL et des paramètres
+    const query = 'SELECT content FROM exercises WHERE LOWER(content) LIKE LOWER(?)';
+    const params = [`%${fileName}%`];
+    console.log('Requête SQL exécutée:', query);
+    console.log('Paramètres:', params);
+
+    const [exercise] = await pool.execute(query, params);
+
+    console.log('Résultat de la requête SQL:', exercise);
+
+    if (!exercise || exercise.length === 0) {
+      return res.status(404).json({ error: 'Fichier non trouvé' });
+    }
+
+    const fileUrl = exercise[0].content;
+    console.log(`Téléchargement depuis MinIO: ${fileUrl}`);
+
+    tempFilePath = path.join('uploads', `temp_${Date.now()}_${fileName}`);
+    await downloadFromS3(fileUrl, tempFilePath);
+
+    if (!fs.existsSync(tempFilePath)) {
+      throw new Error('Le fichier n\'a pas été téléchargé correctement depuis MinIO');
+    }
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+    const fileStream = fs.createReadStream(tempFilePath);
+    fileStream.pipe(res);
+  } catch (err) {
+    console.error('Erreur lors de la récupération du fichier depuis MinIO:', err);
+    res.status(500).json({ error: 'Erreur lors de la récupération du fichier', details: err.message });
+  } finally {
+    if (tempFilePath && fs.existsSync(tempFilePath)) {
+      console.log(`Suppression du fichier temporaire: ${tempFilePath}`);
+      await fsPromises.unlink(tempFilePath).catch(console.error);
+    }
+  }
+});
+
+router.get('/corrections/file/:fileName', auth('student'), async (req, res) => {
+  const { fileName } = req.params;
+  const student_id = req.user.id;
+  let tempFilePath;
+
+  try {
+    console.log(`Recherche du fichier de correction: ${fileName} pour l'étudiant: ${student_id}`);
+
+    // Vérifier si le fichier appartient à une correction d'un exercice auquel l'étudiant a soumis une réponse
+    const [correctionModel] = await pool.execute(
+      `SELECT cm.file_url, c.exercise_id 
+       FROM correction_models cm 
+       JOIN corrections c ON cm.correction_id = c.id 
+       JOIN submissions s ON c.exercise_id = s.exercise_id 
+       WHERE cm.file_url LIKE ? AND s.student_id = ?`,
+      [`%${fileName}`, student_id]
+    );
+
+    console.log('Résultat de la requête SQL:', correctionModel);
+
+    if (!correctionModel || correctionModel.length === 0) {
+      return res.status(404).json({ error: 'Fichier non trouvé ou non autorisé' });
+    }
+
+    // Extraire le chemin de l'objet MinIO
+    const fileUrl = correctionModel[0].file_url;
+    console.log(`Téléchargement depuis MinIO: ${fileUrl}`);
+
+    // Télécharger le fichier depuis MinIO
+    tempFilePath = path.join('uploads', `temp_${Date.now()}_${fileName}`);
+    await downloadFromS3(fileUrl, tempFilePath);
+
+    // Vérifier si le fichier a été téléchargé
+    if (!fs.existsSync(tempFilePath)) {
+      throw new Error('Le fichier n\'a pas été téléchargé correctement depuis MinIO');
+    }
+
+    // Envoyer le fichier
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+    const fileStream = fs.createReadStream(tempFilePath);
+    fileStream.pipe(res);
+  } catch (err) {
+    console.error('Erreur lors de la récupération du fichier depuis MinIO:', err);
+    res.status(500).json({ error: 'Erreur lors de la récupération du fichier', details: err.message });
+  } finally {
+    if (tempFilePath && fs.existsSync(tempFilePath)) {
+      console.log(`Suppression du fichier temporaire: ${tempFilePath}`);
+      await fsPromises.unlink(tempFilePath).catch(console.error);
+    }
+  }
+});
+
+router.get('/submissions/file/:fileName', auth('student'), async (req, res) => {
+  const { fileName } = req.params;
+  const student_id = req.user.id;
+
+  let tempFilePath;
+  let decryptedFilePath;
+
+  try {
+    console.log(`Recherche du fichier: ${fileName} pour l'étudiant: ${student_id}`);
+
+    // Vérifier si le fichier appartient à une soumission de l'étudiant
+    const [submission] = await pool.execute(
+      'SELECT file_path, encryption_key, encryption_iv FROM submissions WHERE file_path LIKE ? AND student_id = ?',
+      [`%${fileName}`, student_id]
+    );
+
+    console.log('Résultat de la requête SQL:', submission);
+
+    if (!submission || submission.length === 0) {
+      return res.status(404).json({ error: 'Fichier non trouvé ou non autorisé' });
+    }
+
+    if (!submission[0].encryption_key || !submission[0].encryption_iv) {
+      return res.status(500).json({ error: 'Clés de chiffrement manquantes' });
+    }
+
+    // Extraire le chemin de l'objet MinIO
+    const fileUrl = submission[0].file_path;
+    const objectName = fileUrl.split('/submissions/')[1];
+    const bucketName = process.env.MINIO_BUCKET || 'base-brain-bucket';
+
+    console.log(`Téléchargement depuis MinIO: ${fileUrl}`);
+    console.log(`ObjectName: ${objectName}, Bucket: ${bucketName}`);
+
+    // Télécharger le fichier chiffré depuis MinIO
+    tempFilePath = path.join('uploads', `temp_${Date.now()}_${fileName}`);
+    console.log(`Téléchargement vers: ${tempFilePath}`);
+    await downloadFromS3(fileUrl, tempFilePath);
+
+    // Vérifier si le fichier a été téléchargé
+    if (!fs.existsSync(tempFilePath)) {
+      throw new Error('Le fichier n\'a pas été téléchargé correctement depuis MinIO');
+    }
+
+    // Déchiffrer le fichier
+    console.log('Déchiffrement du fichier...');
+    decryptedFilePath = await decryptFile(tempFilePath, submission[0].encryption_key, submission[0].encryption_iv);
+
+    // Vérifier si le fichier déchiffré existe
+    if (!fs.existsSync(decryptedFilePath)) {
+      throw new Error('Le fichier déchiffré n\'a pas été créé correctement');
+    }
+
+    // Envoyer le fichier déchiffré
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${fileName.replace('.enc', '')}"`);
+    const fileStream = fs.createReadStream(decryptedFilePath);
+    fileStream.pipe(res);
+  } catch (err) {
+    console.error('Erreur lors de la récupération de la soumission depuis MinIO:', err);
+    res.status(500).json({ error: 'Erreur lors de la récupération du fichier', details: err.message });
+  } finally {
+    if (tempFilePath && fs.existsSync(tempFilePath)) {
+      console.log(`Suppression du fichier temporaire: ${tempFilePath}`);
+      await fsPromises.unlink(tempFilePath).catch(console.error);
+    }
+    if (decryptedFilePath && fs.existsSync(decryptedFilePath)) {
+      console.log(`Suppression du fichier déchiffré: ${decryptedFilePath}`);
+      await fsPromises.unlink(decryptedFilePath).catch(console.error);
+    }
+  }
+});
 // Récupérer tous les exercices pour l'étudiant
 router.get('/exercises', auth('student'), async (req, res) => {
   try {
